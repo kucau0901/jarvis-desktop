@@ -1,8 +1,10 @@
-# A tag v* builds the Mac and Windows apps and attaches them to that tag's GitHub release.
+# Every push to main and every PR builds the Mac and Windows apps; a tag v* also
+# attaches them to that tag's GitHub release.
 name: Release
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   pull_request:
 
