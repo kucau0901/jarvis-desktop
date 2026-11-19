@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Jarvis</title>
+  <link rel="stylesheet" href="setup.css" />
+</head>
+<body>
+  <main>
+    <img class="mark" src="../assets/icon.png" alt="" width="64" height="64" />
+    <h1>Your Jarvis</h1>
+    <p class="lead">The address you open Jarvis at in a browser.</p>
+    <p id="problem" class="problem" hidden></p>
+    <form id="form" novalidate>
+      <label for="address">Address</label>
+      <input id="address" type="url" placeholder="jarvis.example.com" autocomplete="url" spellcheck="false" required />
+      <details id="access">
+        <summary>Behind Cloudflare Access</summary>
+        <p class="note">A service token lets the app through Access. Without one, the app shows Access's own sign-in. Leave both empty if there is no Access in front of Jarvis.</p>
+        <label for="accessId">Client ID</label>
+        <input id="accessId" type="text" spellcheck="false" autocomplete="off" />
+        <label for="accessSecret">Client secret</label>
+        <input id="accessSecret" type="password" autocomplete="off" />
+        <p id="kept" class="note" hidden>A secret is kept. Type a new one to replace it, or clear the Client ID to remove the token.</p>
+      </details>
+      <p id="said" class="said" role="status"></p>
+      <div class="buttons">
+        <button id="retry" type="button" class="secondary" hidden>Try again</button>
+        <button id="open" type="submit">Open Jarvis</button>
+      </div>
+    </form>
+  </main>
+  <script src="setup.js"></script>
+</body>
+</html>
