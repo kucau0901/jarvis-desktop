@@ -11,6 +11,8 @@ import {
   MAX_ANSWER,
   MAX_TEXT,
   mayOpen,
+  nearApps,
+  plainName,
   readRequest,
   refusesInput,
 } from "../src/rules.ts";
@@ -64,6 +66,19 @@ test("open: an app by its name or a web address, never a file or another kind of
   ]) {
     assert.equal(mayOpen(bad), null, bad);
   }
+});
+
+test("an app by its name as people say it: no case, no spaces, no marks it carries unseen", () => {
+  assert.equal(plainName("Chat Pad"), "chatpad");
+  assert.equal(plainName("\u200eWhatsApp"), "whatsapp");
+  assert.equal(plainName("Visual Studio Code"), plainName("visualstudiocode"));
+  const installed = ["Chat Pad", "Chat", "WhatsApp", "Calculator", "Chatty Notes", "Safari"];
+  assert.deepEqual(nearApps("ChatPad", installed), ["Chat Pad"]);
+  assert.deepEqual(nearApps("chat", installed), ["Chat", "Chat Pad", "Chatty Notes"]);
+  assert.deepEqual(nearApps("whats app", installed), ["WhatsApp"]);
+  assert.deepEqual(nearApps("Spotify", installed), []);
+  assert.deepEqual(nearApps("  ", installed), []);
+  assert.equal(nearApps("a", ["Aa", "Ab", "Ac", "Ad", "Ae", "Af"]).length, 5);
 });
 
 test("never typed or pressed into: terminals, System Settings, password prompts and apps, Jarvis itself", () => {

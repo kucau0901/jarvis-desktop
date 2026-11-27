@@ -67,7 +67,7 @@ let NAMES: [String: String] = [
 
 struct App {
   let app: NSRunningApplication
-  var name: String { app.localizedName ?? "an app" }
+  var name: String { shown(app.localizedName ?? "an app") }
   var bundle: String { app.bundleIdentifier ?? "" }
   var pid: pid_t { app.processIdentifier }
 }
@@ -76,13 +76,65 @@ func front() -> App? {
   NSWorkspace.shared.frontmostApplication.map(App.init)
 }
 
-/// An app by its name or bundle id, or the one in front: Jarvis looks at any app, behind others or not.
-func named(_ name: String) -> App? {
-  if name.isEmpty { return front() }
-  let want = name.lowercased()
-  return NSWorkspace.shared.runningApplications
-    .first { $0.activationPolicy == .regular && ($0.localizedName?.lowercased() == want || $0.bundleIdentifier?.lowercased() == want) }
-    .map(App.init)
+/// The run loop let through, so an app opened, quit or brought forward since the last request is seen: without it
+/// macOS keeps telling this helper the apps that ran when it started.
+func pump() {
+  while CFRunLoopRunInMode(.defaultMode, 0, true) == .handledSource {}
+}
+
+/// A name without the marks some carry unseen (WhatsApp's starts with a left-to-right mark).
+func shown(_ s: String) -> String {
+  String(String.UnicodeScalarView(s.unicodeScalars.filter { $0.properties.generalCategory != .format }))
+}
+
+/// A name as people say it: letters and digits only, any case ("chatpad" is Chat Pad, "whatsapp" is WhatsApp).
+func plain(_ s: String) -> String {
+  String(String.UnicodeScalarView(s.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) })).lowercased()
+}
+
+/// An app by its name or bundle id, or the one in front: Jarvis looks at any app, behind others or not. Part of a
+/// name will do when only one open app has it; otherwise why not.
+func named(_ name: String) -> (App?, String) {
+  if name.isEmpty { return (front(), "No app is in front.") }
+  let want = plain(name)
+  let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
+  if let a = apps.first(where: { plain($0.localizedName ?? "") == want || $0.bundleIdentifier?.lowercased() == name.lowercased() }) {
+    return (App(app: a), "")
+  }
+  let some = want.isEmpty ? [] : apps.filter { plain($0.localizedName ?? "").contains(want) }
+  if some.count == 1 { return (App(app: some[0]), "") }
+  if some.count > 1 { return (nil, "Several open apps are called something like \(name): \(some.map { App(app: $0).name }.joined(separator: ", ")). Say which.") }
+  return (nil, "\(name) is not open on this Mac: open it first.")
+}
+
+/// Apps made with Electron (Slack, Discord and the like) show their window's page to Accessibility only once asked:
+/// asked at each look until it shows, the first time with up to three seconds for the page to come through.
+var asked: Set<pid_t> = []
+/// Those apps: keys sent to one behind other windows never reach its page.
+var electron: Set<pid_t> = []
+func reveal(_ app: AXUIElement, _ pid: pid_t) {
+  if electron.contains(pid) && paged(app) { return }
+  guard AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue) == .success else { return }
+  electron.insert(pid)
+  guard !asked.contains(pid) else { return }
+  asked.insert(pid)
+  for _ in 0..<12 {
+    if paged(app) { return }
+    usleep(250_000)
+  }
+}
+
+/// Whether a window's page has come through: a web area with something in it.
+func paged(_ app: AXUIElement) -> Bool {
+  var queue = (attr(app, kAXWindowsAttribute) as? [AXUIElement]) ?? []
+  var seen = 0
+  while !queue.isEmpty && seen < 500 {
+    let el = queue.removeFirst()
+    seen += 1
+    if str(el, kAXRoleAttribute) == "AXWebArea" { return !children(el).isEmpty }
+    queue += children(el)
+  }
+  return false
 }
 
 /// The app the last look was of, while it runs: what is pressed, typed or scrolled goes to it alone, where it is.
@@ -100,8 +152,10 @@ func windowNumber(_ pid: pid_t) -> Int? {
 
 /// What an app's window shows, in front or behind: numbered elements to press or fill, and its words, within `max` characters.
 func read(max: Int, name: String) -> [String: Any] {
-  guard let f = named(name) else { return ["ok": false, "text": name.isEmpty ? "No app is in front." : "\(name) is not open on this Mac: open it first."] }
+  let (app_, why) = named(name)
+  guard let f = app_ else { return ["ok": false, "text": why] }
   let app = AXUIElementCreateApplication(f.pid)
+  reveal(app, f.pid)
   var found: [AXUIElement] = []
   var lines: [String] = []
   var words: [String] = []
@@ -164,6 +218,8 @@ func target(_ deny: [String]) -> (App?, String?) {
 }
 
 let BEHIND = "it would have to come to the front first (act front), which Jarvis does only when they say so."
+/// Where text is typed: pressing one puts the cursor in it, in front or behind.
+let FIELDS: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"]
 
 func element(_ n: Int) -> AXUIElement? {
   guard let list = last[lastPid], n >= 1, n <= list.count else { return nil }
@@ -183,6 +239,12 @@ func press(_ n: Int, deny: [String]) -> [String: Any] {
   guard let a else { return ["ok": false, "text": why ?? ""] }
   guard let el = element(n) else { return ["ok": false, "text": "No element \(n) in the last look at \(a.name): look again."] }
   if isSecure(el) { return ["ok": false, "text": "That is a password field: Jarvis never types a password."] }
+  if FIELDS.contains(str(el, kAXRoleAttribute)) {
+    field = (a.pid, el)
+    return AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success
+      ? ["ok": true, "app": a.name, "text": "The cursor is in that field in \(a.name): type now."]
+      : ["ok": false, "text": "The cursor could not be put in that field."]
+  }
   // Through Accessibility, wherever the window is: nothing of the person's is touched.
   if AXUIElementPerformAction(el, kAXPressAction as CFString) == .success { return ["ok": true, "app": a.name] }
   // A real click only on an app in front, at a place that is its own.
@@ -199,21 +261,44 @@ func focus(_ n: Int, deny: [String]) -> [String: Any] {
   return AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success ? ["ok": true, "app": a.name] : ["ok": false, "text": "It could not be focused."]
 }
 
-/// Text into the field that has the app's focus: written there through Accessibility, in front or behind; as keys only to an app in front.
-func type(_ text: String, deny: [String]) -> [String: Any] {
+/// The field last pressed, and its app: typed into next while that app is the one looked at.
+var field: (pid_t, AXUIElement)?
+
+/// Whether an element is part of a web page (an Electron app's window, a browser's).
+func inPage(_ el: AXUIElement) -> Bool {
+  var at = el
+  for _ in 0..<60 {
+    if str(at, kAXRoleAttribute) == "AXWebArea" { return true }
+    guard let p = attr(at, kAXParentAttribute) else { return false }
+    at = p as! AXUIElement
+  }
+  return false
+}
+
+/// Text into field `n` of the last look, else the one that has the app's focus: written there through Accessibility,
+/// in front or behind; as keys only to an app in front.
+func type(_ text: String, into n: Int?, deny: [String]) -> [String: Any] {
   let (a, why) = target(deny)
   guard let a else { return ["ok": false, "text": why ?? ""] }
-  let focused = attr(AXUIElementCreateApplication(a.pid), kAXFocusedUIElementAttribute).map { $0 as! AXUIElement }
-  if let el = focused {
+  var chosen: AXUIElement?
+  if let n {
+    guard let el = element(n) else { return ["ok": false, "text": "No element \(n) in the last look at \(a.name): look again."] }
+    chosen = el
+  } else if let (pid, el) = field, pid == a.pid {
+    chosen = el
+  }
+  if let el = chosen, !isSecure(el) { AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue) }
+  if let el = chosen ?? attr(AXUIElementCreateApplication(a.pid), kAXFocusedUIElementAttribute).map({ $0 as! AXUIElement }) {
     if isSecure(el) { return ["ok": false, "text": "That is a password field: Jarvis never types a password."] }
-    if AXUIElementSetAttributeValue(el, kAXSelectedTextAttribute as CFString, text as CFString) == .success { return ["ok": true, "app": a.name] }
+    // A page's field (Electron, Safari) says yes to selected text and does nothing: its value is written, as typing would.
+    if !inPage(el) && AXUIElementSetAttributeValue(el, kAXSelectedTextAttribute as CFString, text as CFString) == .success { return ["ok": true, "app": a.name] }
     var settable: DarwinBoolean = false
     if AXUIElementIsAttributeSettable(el, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue,
        AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, (str(el, kAXValueAttribute) + text) as CFString) == .success {
       return ["ok": true, "app": a.name]
     }
   }
-  guard a.app.isActive else { return ["ok": false, "text": "\(a.name) has no field that takes text from behind: focus one (focus N), or \(BEHIND)"] }
+  guard a.app.isActive else { return ["ok": false, "text": "\(a.name) has no field that takes text from behind: press the field first (press N), or \(BEHIND)"] }
   if IsSecureEventInputEnabled() { return ["ok": false, "text": "Secure input is on (a password is being typed somewhere): not now."] }
   let src = CGEventSource(stateID: .hidSystemState)
   let units = Array(text.utf16)
@@ -253,6 +338,9 @@ func key(_ name: String, mods: [String], deny: [String]) -> [String: Any] {
   let (a, why) = target(deny)
   guard let a else { return ["ok": false, "text": why ?? ""] }
   guard let code = KEYS[name] else { return ["ok": false, "text": "No such key: \(name)."] }
+  if electron.contains(a.pid) && !a.app.isActive {
+    return ["ok": false, "text": "Keys do not reach \(a.name) from behind: press its buttons instead (press N), or \(BEHIND)"]
+  }
   if a.app.isActive && IsSecureEventInputEnabled() { return ["ok": false, "text": "Secure input is on (a password is being typed somewhere): not now."] }
   let flags = mods.reduce(CGEventFlags()) { $0.union(MODS[$1] ?? []) }
   let src = CGEventSource(stateID: .hidSystemState)
@@ -307,8 +395,12 @@ func scroll(_ n: Int?, up: Bool) -> [String: Any] {
 func activate() -> [String: Any] {
   guard let a = looked() else { return ["ok": false, "text": "Look at the app first, by its name."] }
   if AXUIElementSetAttributeValue(AXUIElementCreateApplication(a.pid), kAXFrontmostAttribute as CFString, kCFBooleanTrue) != .success { a.app.activate() }
-  usleep(300_000)
-  return ["ok": a.app.isActive, "app": a.name, "text": a.app.isActive ? "\(a.name) is in front." : "\(a.name) did not come to the front."]
+  for _ in 0..<20 {
+    usleep(100_000)
+    pump()
+    if NSWorkspace.shared.frontmostApplication?.processIdentifier == a.pid { return ["ok": true, "app": a.name, "text": "\(a.name) is in front."] }
+  }
+  return ["ok": false, "app": a.name, "text": "\(a.name) did not come to the front."]
 }
 
 func answer(_ req: [String: Any]) -> [String: Any] {
@@ -322,7 +414,7 @@ func answer(_ req: [String: Any]) -> [String: Any] {
   case "read": return AXIsProcessTrusted() ? read(max: (req["max"] as? NSNumber)?.intValue ?? 6000, name: (req["name"] as? String) ?? "") : untrusted
   case "press": return AXIsProcessTrusted() ? press(n ?? 0, deny: deny) : untrusted
   case "focus": return AXIsProcessTrusted() ? focus(n ?? 0, deny: deny) : untrusted
-  case "type": return AXIsProcessTrusted() ? type((req["text"] as? String) ?? "", deny: deny) : untrusted
+  case "type": return AXIsProcessTrusted() ? type((req["text"] as? String) ?? "", into: n, deny: deny) : untrusted
   case "key": return AXIsProcessTrusted() ? key((req["key"] as? String) ?? "", mods: (req["mods"] as? [String]) ?? [], deny: deny) : untrusted
   case "scroll": return AXIsProcessTrusted() ? scroll(n, up: (req["dir"] as? String) == "up") : untrusted
   case "activate": return AXIsProcessTrusted() ? activate() : untrusted
@@ -337,6 +429,7 @@ let untrusted: [String: Any] = [
 
 while let line = readLine() {
   guard let data = line.data(using: .utf8), let req = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { continue }
+  pump()
   var out = answer(req)
   out["id"] = req["id"] ?? NSNull()
   if let json = try? JSONSerialization.data(withJSONObject: out), let s = String(data: json, encoding: .utf8) { print(s) }
