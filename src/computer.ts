@@ -29,10 +29,10 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { openSecret, sealSecret, type Config } from "./config.ts";
 import { Helper } from "./helper.ts";
-import { findClaude, runBuild, stopBuilds, type Built } from "./build.ts";
+import { collect, findClaude, runRound, stopBuilds, tidyUp } from "./build.ts";
 import { runCommand, stopCommands } from "./run.ts";
 import { screenshot } from "./screen.ts";
-import { answerOf, backoff, buildUrl, eventsUrl, gotOf, isMacToken, keyCombo, LOCKED_APP, mayOpen, nearApps, plainName, readBuild, readRequest, REFUSED_APPS, STOP_SHORTCUT, type BuildRequest, type ComputerRequest } from "./rules.ts";
+import { answerOf, backoff, BEAT_MS, buildFileUrl, buildSourceUrl, buildUrl, eventsUrl, gotOf, isMacToken, keyCombo, LOCKED_APP, mayOpen, nearApps, plainName, readBuild, readRequest, REFUSED_APPS, STOP_SHORTCUT, type BuildRequest, type ComputerRequest } from "./rules.ts";
 
 const exec = promisify(execFile);
 
@@ -65,8 +65,11 @@ let retry: NodeJS.Timeout | undefined;
 let ping: NodeJS.Timeout | undefined;
 let linking: NodeJS.Timeout | undefined;
 let busy = false;
-/** A Claude Code build running here (src/build.ts): one at a time, beside what else Jarvis asks. */
+/** A round of a Claude Code build running here, or what it made being sent back (src/build.ts): one at a time, beside what else Jarvis asks. */
 let building = false;
+/** Kept awake a while after a round, for the job's answer to come. */
+let awakeTail: NodeJS.Timeout | undefined;
+let awake: number | null = null;
 let banner: BrowserWindow | null = null;
 let bannerTimer: NodeJS.Timeout | undefined;
 
@@ -376,50 +379,114 @@ async function handle(r: ComputerRequest): Promise<{ ok: boolean; text: string; 
   }
 }
 
+/** Kept from sleeping while a build works, and for half an hour after a round, for the job's answer. */
+function keepAwake(on: boolean): void {
+  clearTimeout(awakeTail);
+  if (on) {
+    if (awake === null) awake = powerSaveBlocker.start("prevent-app-suspension");
+    return;
+  }
+  awakeTail = setTimeout(() => {
+    if (awake !== null) powerSaveBlocker.stop(awake);
+    awake = null;
+  }, 30 * 60_000);
+}
+
 /**
- * A build its person's tap in Jarvis started (src/build.ts): run here, beside
- * what else Jarvis asks, one at a time, with the banner up and the Mac kept
- * from sleeping until it is over; then what came of it sent back.
+ * A build its person's tap in Jarvis began (src/build.ts): a round run here,
+ * or what it made sent back, beside what else Jarvis asks, one at a time,
+ * with the banner up and the Mac kept from sleeping; Jarvis told every ten
+ * minutes that it still works, and then what came of it.
  */
 async function build(b: BuildRequest): Promise<void> {
-  if (building) return send(b.id, { ok: false, said: "This Mac is already building something for Jarvis: one at a time.", zip: null });
-  if (process.platform !== "darwin") return send(b.id, { ok: false, said: "Claude Code builds are only on a Mac.", zip: null });
+  if ("stop" in b) {
+    if (building) stopBuilds();
+    return;
+  }
+  const round = "round" in b ? b.round : 1;
+  const no = (why: string) => ("finish" in b ? say(b.id, { state: "done", files: [], left: [{ name: "everything", why }], path: "" }) : say(b.id, { state: "said", round, said: why, how: "busy" }));
+  if (building) return no("This Mac is already working on a build for Jarvis: one at a time.");
+  if (process.platform !== "darwin") return no("Claude Code builds are only on a Mac.");
   building = true;
   working(true);
-  const awake = powerSaveBlocker.start("prevent-app-suspension");
-  let r: Built;
+  keepAwake(true);
+  let paused = 0;
+  const beat = setInterval(() => void say(b.id, paused > Date.now() ? { state: "paused", until: paused } : { state: "working" }), BEAT_MS);
+  const where = { claude: findClaude(homedir()), home: homedir(), temp: app.getPath("temp") };
   try {
-    r = await runBuild(b, { claude: findClaude(homedir()), temp: app.getPath("temp"), home: homedir() });
+    if ("finish" in b) {
+      const c = await collect(b, where);
+      const sent: string[] = [];
+      for (const f of c.files) {
+        if (await sendFile(b.id, f.name, f.path)) sent.push(f.name);
+        else c.left.push({ name: f.name, why: "it could not be sent" });
+      }
+      await tidyUp(c);
+      logLine(`send back “${b.name}”`, sent.length > 0, sent.join(", ") || "nothing");
+      await say(b.id, { state: "done", files: sent, left: c.left, path: c.path });
+      return;
+    }
+    const source = "start" in b && b.start.repo ? await fetchSource(b.id) : null;
+    if ("start" in b && b.start.repo && !source) return void (await say(b.id, { state: "said", round, said: "Not begun: the repository's files could not be fetched from Jarvis.", how: "error" }));
+    const r = await runRound(b, where, (until) => {
+      paused = until;
+      void say(b.id, { state: "paused", until });
+    }, source);
+    logLine(`build “${b.name}” with Claude Code, round ${round}`, r.how === "turn", r.said);
+    await say(b.id, r.how === "stopped" ? { state: "stopped" } : { state: "said", round, said: r.said, how: r.how });
   } catch (e) {
-    r = { ok: false, said: e instanceof Error ? e.message : String(e), zip: null };
+    await say(b.id, "finish" in b ? { state: "done", files: [], left: [{ name: "everything", why: e instanceof Error ? e.message : String(e) }], path: "" } : { state: "said", round, said: e instanceof Error ? e.message : String(e), how: "error" });
   } finally {
-    powerSaveBlocker.stop(awake);
+    clearInterval(beat);
+    keepAwake(false);
     building = false;
     working(false);
   }
-  logLine(`build “${b.name}” with Claude Code`, r.ok, r.said);
-  return send(b.id, r);
 }
 
-/** What came of a build, to Jarvis, as this Mac (its token, and the Access headers): tried again a few times if the network fails. */
-async function send(id: string, r: Built): Promise<void> {
+/** This Mac's headers for Jarvis: its token, and the Access ones; null while it is not linked. */
+function asThisMac(): { origin: string; headers: Record<string, string> } | null {
   const c = deps.config();
   const token = c?.computer ? openSecret(c.computer) : "";
-  if (!c || !token) return;
-  const headers: Record<string, string> = { Authorization: `Bearer ${token}`, "content-type": "application/json" };
+  if (!c || !token) return null;
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
   const a = deps.access();
   if (a) Object.assign(headers, { "CF-Access-Client-Id": a.id, "CF-Access-Client-Secret": a.secret });
-  const body = JSON.stringify({ id, ok: r.ok, said: r.said.slice(0, 2_000), zip: r.zip ? r.zip.toString("base64url") : null });
+  return { origin: c.origin, headers };
+}
+
+/** A request to Jarvis as this Mac, tried again a few times if the network fails: whether it was taken. A refusal for good (its job gone, say) is not tried again. */
+async function toJarvis(url: (origin: string) => string, init: { method: string; headers?: Record<string, string>; body?: string | Uint8Array }): Promise<Response | null> {
+  const me = asThisMac();
+  if (!me) return null;
   for (let i = 0; i < 4; i++) {
     try {
-      const res = await fetch(buildUrl(c.origin), { method: "POST", headers, body });
-      // Taken, or refused for good (its job gone, say): either way, sent.
-      if (res.status < 500) return;
+      const res = await fetch(url(me.origin), { method: init.method, headers: { ...me.headers, ...init.headers }, ...(init.body === undefined ? {} : { body: init.body as BodyInit }) });
+      if (res.status < 500) return res;
     } catch {
       // the network; again in a moment
     }
     await pause(backoff(i + 1));
   }
+  return null;
+}
+
+/** What this Mac says of a build (jarvis-voice-agent routes/computer.ts). */
+async function say(id: string, report: Record<string, unknown>): Promise<void> {
+  await toJarvis(buildUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, ...report }) });
+}
+
+/** One file of what it made, to the job's folder. */
+async function sendFile(id: string, name: string, path: string): Promise<boolean> {
+  const body = new Uint8Array(readFileSync(path));
+  const res = await toJarvis((o) => buildFileUrl(o, id, name), { method: "POST", headers: { "content-type": "application/octet-stream" }, body });
+  return res?.ok === true;
+}
+
+/** On a repository, its files to begin from, as Jarvis has them for that build. */
+async function fetchSource(id: string): Promise<Buffer | null> {
+  const res = await toJarvis((o) => buildSourceUrl(o, id), { method: "GET" });
+  return res?.ok ? Buffer.from(await res.arrayBuffer()) : null;
 }
 
 /** The banner while Jarvis works here, left out of screenshots, with Stop; and the tray icon's mark. */

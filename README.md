@@ -95,17 +95,27 @@ again.
 ### Claude Code builds
 
 A build job in Jarvis can hand its coding to [Claude Code](https://docs.claude.com/en/docs/claude-code)
-on this Mac, when you ask for it ("build a page for the bakery, use Claude Code"). The job researches,
-then puts a card to you in Jarvis with what you asked and what it found; **only your tap there starts
-the build**. Claude Code must be installed here and signed in.
+on this Mac, when you ask for it ("build a small Android app for the bakery, use Claude Code"): a site,
+an app or a tool. The job researches, then puts a card to you in Jarvis with what you asked and what it
+found; **only your tap there starts the build**. Claude Code must be installed here and signed in.
 
-- It runs in a new folder of its own, outside your home folder, in Claude Code's sandbox: it writes only
-  there, reads nothing in your home folder, reaches only npm's registry, and has no web tools. It starts
+- It works in a folder of its own in `/Users/Shared/JarvisBuilds`, outside your home folder, which stays
+  there for you to open. A later Claude Code job in the same Jarvis project goes on in the same folder.
+- It works in rounds. Each time Claude Code stops, Jarvis is told what it said and answers it, asking you
+  first what only you can decide, up to 50 rounds. There is no time limit but your Claude plan's: at its
+  limit this Mac waits for it to reset, up to a day, and goes on by itself.
+- It runs in Claude Code's sandbox, under settings given on its command line: it writes only in its
+  folder, reads nothing in your home folder but the Android SDK (read-only), reaches only the package
+  registries (npm, GitHub, Google's and Maven's, Gradle, crates.io, PyPI), and has no web tools. It starts
   with a clean environment, so nothing this Mac keeps in its own reaches it.
-- It has 30 minutes. While it runs, the banner is up and the Mac does not sleep; **Stop** ends it.
-- What goes back to Jarvis is the site's plain files alone (no links), at most 300 files and 10 MB. The
-  folder is then removed. The job checks the files and puts the usual Publish card to you: nothing is
-  published until you tap that too.
+- While a round runs, the banner is up and the Mac does not sleep, and for half an hour after; **Stop**
+  ends it. A round that prints nothing for half an hour is stopped.
+- What goes back to Jarvis, when the job asks for it: the site (a `dist` folder, or `index.html` at the
+  top), what you install (its `out` folder) and the source, as plain files only (no links), each 20 MB at
+  most. What is bigger stays in the folder, and Jarvis says so. Then the job puts the usual Publish card,
+  or a pull request card, to you, or gives the files in Jobs: nothing is published until you tap that too.
+- What this Mac can build is what it has: Node, and the Android SDK with Java for Android apps; with only
+  the Command Line Tools, a Mac app is Swift, with no Xcode project or iOS.
 
 ## What it allows
 
