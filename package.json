@@ -1,7 +1,7 @@
 {
   "name": "jarvis-desktop",
   "productName": "Jarvis",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Jarvis on the desktop: your own Jarvis in a window, with alerts, a talk shortcut and file drop.",
   "license": "MIT",
   "repository": "github:kucau0901/jarvis-desktop",
