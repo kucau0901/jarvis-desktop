@@ -32,6 +32,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { loadConfig, openSecret, saveConfig, sealSecret, type Config } from "./config.ts";
+import { addressChanged, computerMenu, initComputer } from "./computer.ts";
 import {
   filesInArgs,
   isWeb,
@@ -121,6 +122,23 @@ function start(): void {
     watchPresence();
     bridge();
     setupScreen();
+    // Jarvis using this Mac for its person (src/computer.ts): on a Mac only.
+    if (mac) {
+      initComputer({
+        config: () => config,
+        save: (c) => {
+          config = c;
+          saveConfig(c);
+        },
+        page: () => win?.webContents ?? null,
+        access: () => (config?.accessId && openSecret(config.accessSecret) ? { id: config.accessId, secret: openSecret(config.accessSecret) } : null),
+        refresh: () => {
+          buildMenu();
+          refreshTray();
+        },
+        working: (on) => tray?.setTitle(on ? "●" : ""),
+      });
+    }
 
     const atLogin = process.argv.includes("--hidden") || (mac && app.getLoginItemSettings().wasOpenedAtLogin === true);
     if (!config) openSetup();
@@ -436,8 +454,11 @@ function setupScreen(): void {
         return "Type the client secret too, or clear the Client ID.";
       }
     }
-    config = { origin: n.origin, accessId, accessSecret };
+    // This Mac's token is for the Jarvis that made it: another address drops it.
+    const same = config?.origin === n.origin;
+    config = { origin: n.origin, accessId, accessSecret, computer: same ? config!.computer : "", computerOn: same && config!.computerOn };
     saveConfig(config);
+    if (mac && !same) addressChanged();
     applyAccess();
     problem = "";
     clearTimeout(retryTimer);
@@ -498,6 +519,9 @@ function buildMenu(): void {
             address,
             login,
             { type: "separator" },
+            // In the app's own menu too, not only the menu bar's icon, which a full menu bar can hide.
+            ...computerMenu(),
+            { type: "separator" },
             { role: "services" },
             { type: "separator" },
             { role: "hide" },
@@ -539,6 +563,7 @@ function refreshTray(): void {
         click: () => talk(),
       },
       { type: "separator" },
+      ...(mac ? [...computerMenu(), { type: "separator" as const }] : []),
       { label: "Open at Login", type: "checkbox", checked: openAtLogin(), click: (item) => setOpenAtLogin(item.checked) },
       { label: "Change Jarvis Address…", click: () => openSetup() },
       { type: "separator" },
