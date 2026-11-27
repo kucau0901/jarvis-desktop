@@ -39,8 +39,28 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - name: Build (and publish on a tag)
-        run: npm run dist -- --publish ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}
+        shell: bash
+        # With the repository's Developer ID secrets (README, "Signing"), the Mac app is signed with it, under the
+        # hardened runtime, and notarized; without them (a fork, or before they are set) it is signed ad hoc, as
+        # package.json says. Windows is never given the Mac's certificate.
+        run: |
+          signed=()
+          if [ "$RUNNER_OS" = "macOS" ] && [ -n "$CSC_LINK" ]; then
+            if [ -n "$APPLE_API_KEY_P8" ]; then
+              printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/apple-api-key.p8"
+              export APPLE_API_KEY="$RUNNER_TEMP/apple-api-key.p8"
+            fi
+            signed=(-c.mac.identity="Developer ID Application" -c.mac.hardenedRuntime=true)
+          else
+            unset CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_ID APPLE_API_ISSUER
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          fi
+          npm run dist -- --publish "$PUBLISH" "${signed[@]}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # No signing certificate: the Mac app is signed ad hoc (package.json build.mac.identity).
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
