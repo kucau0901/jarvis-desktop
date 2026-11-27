@@ -22,6 +22,8 @@ test("a request as Jarvis sends it is read", () => {
   assert.deepEqual(readRequest(req()), { id: "a1b2-c3", op: "look", act: null, element: null, text: null, picture: false, ms: 15_000 });
   assert.equal(readRequest(req({ op: "run", text: "df -h", ms: 120_000 }))?.text, "df -h");
   assert.equal(readRequest(req({ op: "do", act: "press", element: 3 }))?.element, 3);
+  assert.equal(readRequest(req({ text: "Spotify" }))?.text, "Spotify");
+  assert.equal(readRequest(req({ op: "do", act: "front" }))?.act, "front");
 });
 
 test("anything else is not done", () => {
@@ -65,7 +67,7 @@ test("open: an app by its name or a web address, never a file or another kind of
 });
 
 test("never typed or pressed into: terminals, System Settings, password prompts and apps, Jarvis itself", () => {
-  for (const b of ["com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable", "com.apple.systempreferences", "com.apple.SecurityAgent", "com.apple.Passwords", "app.jarvis.desktop", "com.apple.ScriptEditor2"]) {
+  for (const b of ["com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable", "com.apple.systempreferences", "com.apple.SecurityAgent", "com.apple.Passwords", "app.jarvis.desktop", "com.apple.ScriptEditor2", "com.apple.loginwindow"]) {
     assert.equal(refusesInput(b), true, b);
   }
   for (const b of ["com.apple.Safari", "com.spotify.client", "com.apple.finder", "com.apple.TextEdit"]) assert.equal(refusesInput(b), false, b);

@@ -1,7 +1,9 @@
 /**
  * Jarvis using this Mac for its person (jarvis-voice-agent docs/DESIGN.md,
- * "The Mac"): a command run in their shell, an app opened, the front window
- * read, a press, typing, keys, scrolling.
+ * "The Mac"): a command run in their shell, an app opened, its window read, a
+ * press, typing, keys, scrolling. An app is used where it is, behind the one
+ * its person works in or not, so they go on working; it comes to the front
+ * only when they say so, for what cannot be done from behind.
  *
  * Off until its person turns on "Let Jarvis control this Mac" in the menu bar.
  * The first time, the page in Jarvis's window, signed in as them, makes this
@@ -27,7 +29,7 @@ import { openSecret, sealSecret, type Config } from "./config.ts";
 import { Helper } from "./helper.ts";
 import { runCommand, stopCommands } from "./run.ts";
 import { screenshot } from "./screen.ts";
-import { answerOf, backoff, eventsUrl, gotOf, isMacToken, keyCombo, mayOpen, readRequest, REFUSED_APPS, STOP_SHORTCUT, type ComputerRequest } from "./rules.ts";
+import { answerOf, backoff, eventsUrl, gotOf, isMacToken, keyCombo, LOCKED_APP, mayOpen, readRequest, REFUSED_APPS, STOP_SHORTCUT, type ComputerRequest } from "./rules.ts";
 
 const exec = promisify(execFile);
 
@@ -91,11 +93,12 @@ export function initComputer(d: ComputerDeps): void {
   helper = new Helper(app.isPackaged ? join(process.resourcesPath, "jarvis-control") : join(app.getAppPath(), "build", "native", "jarvis-control"));
   ipcMain.on("jd:computerLinked", (e, r: { token?: unknown; error?: unknown }) => linked(e.sender, r));
   ipcMain.on("jd:computerStop", (e) => {
-    if (banner && e.sender === banner.webContents) stop();
+    if (banner && e.sender === banner.webContents) void stop();
   });
   powerMonitor.on("resume", reconnectNow);
   powerMonitor.on("unlock-screen", reconnectNow);
   if (deps.config()?.computerOn) turnOn();
+  else deps.refresh();
 }
 
 /** The address changed: a token is only for the Jarvis that made it (main.ts drops it), so control is off. */
@@ -127,11 +130,12 @@ export function computerMenu(): MenuItemConstructorOptions[] {
 function turnOn(asked = false): void {
   const c = deps.config();
   if (!c) return;
+  // macOS asks, at once and only once, whether Jarvis may use other apps, and lists it in System Settings →
+  // Accessibility; until it is allowed there, Jarvis reads and presses nothing here (the helper says so).
+  if (asked) systemPreferences.isTrustedAccessibilityClient(true);
   if (c.computer && openSecret(c.computer)) {
     if (!c.computerOn) deps.save({ ...c, computerOn: true });
-    // Until it is allowed, Jarvis reads and presses nothing here (the helper says so).
-    if (asked) systemPreferences.isTrustedAccessibilityClient(true);
-    globalShortcut.register(STOP_SHORTCUT, () => stop());
+    globalShortcut.register(STOP_SHORTCUT, () => void stop());
     return connect();
   }
   const page = deps.page();
@@ -167,7 +171,7 @@ function linked(sender: WebContents, r: { token?: unknown; error?: unknown }): v
     set("off");
     return note(e instanceof Error ? e.message : String(e));
   }
-  turnOn(true);
+  turnOn();
 }
 
 function turnOff(): void {
@@ -178,9 +182,11 @@ function turnOff(): void {
 }
 
 /** Stop, from the banner or the shortcut: what runs ends, and control is off until turned on again. */
-function stop(): void {
+async function stop(): Promise<void> {
   stopCommands();
   helper.restart();
+  // What was running answers that it was stopped before the socket closes, so Jarvis is not left waiting.
+  for (let i = 0; i < 40 && busy; i++) await pause(50);
   turnOff();
   note("Stopped. Jarvis can't use this Mac until you turn it on again in the menu bar.");
 }
@@ -267,12 +273,9 @@ async function take(ws: WebSocket, raw: string): Promise<void> {
 
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Which app is in front, and nothing more: what an act says back. */
-async function front(ok: boolean, why?: string): Promise<{ ok: boolean; text: string }> {
-  if (!ok) return { ok, text: why ?? "It did not work." };
-  await pause(400);
-  const f = await helper.ask("front");
-  return { ok, text: f.ok && f.app ? `${f.app} is in front.` : "Done." };
+/** What an act says back: that it was done, and in which app, or why not. */
+function said(a: { ok: boolean; text?: string; app?: string }): { ok: boolean; text: string } {
+  return a.ok ? { ok: true, text: a.app ? `Done in ${a.app}.` : "Done." } : { ok: false, text: a.text ?? "It did not work." };
 }
 
 async function handle(r: ComputerRequest): Promise<{ ok: boolean; text: string; image?: string | null }> {
@@ -282,10 +285,15 @@ async function handle(r: ComputerRequest): Promise<{ ok: boolean; text: string; 
     const how = ran.stopped ? "Stopped on the Mac." : ran.timedOut ? `Out of time after ${Math.round(ms / 1000)} s; what it started was ended.` : `Exit code ${ran.code}.`;
     return { ok: ran.code === 0, text: `${how}\n${ran.out}` };
   }
+  // A locked Mac shows only its lock screen: nothing on it is read or used, though commands still run.
+  if ((await helper.ask("front")).bundle === LOCKED_APP) {
+    return { ok: false, text: "This Mac is locked: its apps cannot be seen or used until someone unlocks it. Commands still run." };
+  }
+  // Each app is used where it is, behind the one its person works in or not: nothing comes to the front unless they say so.
   if (r.op === "look") {
-    const read = await helper.ask("read", { max: 6000 });
-    if (!read.ok) return { ok: false, text: read.text ?? "The screen could not be read." };
-    const image = r.picture ? await screenshot() : null;
+    const read = await helper.ask("read", { max: 6000, name: r.text ?? "" });
+    if (!read.ok) return { ok: false, text: read.text ?? "It could not be read." };
+    const image = r.picture ? await screenshot(typeof read.window === "number" ? read.window : null) : null;
     const missing = r.picture && !image ? "\n(No screenshot: Jarvis is not allowed Screen Recording on this Mac.)" : "";
     return { ok: true, text: `${read.text ?? ""}${missing}`, image };
   }
@@ -294,31 +302,25 @@ async function handle(r: ComputerRequest): Promise<{ ok: boolean; text: string; 
     case "open": {
       const o = r.text ? mayOpen(r.text) : null;
       if (!o) return { ok: false, text: "Only an app, by its name, or a web address is opened: never a file." };
-      if ("url" in o) {
-        await shell.openExternal(o.url);
-        return front(true);
-      }
-      const opened = await exec("/usr/bin/open", ["-a", o.app]).then(() => true, () => false);
-      return front(opened, `No app called ${o.app} on this Mac.`);
+      // -g: opened behind what is in use.
+      const opened = await exec("/usr/bin/open", "url" in o ? ["-g", o.url] : ["-g", "-a", o.app]).then(() => true, () => false);
+      if (!opened) return { ok: false, text: "url" in o ? "It could not be opened." : `No app called ${o.app} on this Mac.` };
+      await pause(700);
+      return { ok: true, text: `${"url" in o ? "Opened in the browser" : `${o.app} is open`}, behind what is in use: look at it by its name.` };
     }
-    case "press": {
-      const a = await helper.ask("press", { n: r.element, deny });
-      return front(a.ok, a.text);
-    }
-    case "type": {
-      const a = await helper.ask("type", { text: r.text ?? "", deny });
-      return front(a.ok, a.text);
-    }
+    case "front":
+      return said(await helper.ask("activate"));
+    case "press":
+      return said(await helper.ask("press", { n: r.element, deny }));
+    case "type":
+      return said(await helper.ask("type", { text: r.text ?? "", deny }));
     case "key": {
       const k = r.text ? keyCombo(r.text) : null;
       if (!k) return { ok: false, text: "Not a key this Mac knows (like cmd+t), or it is the Stop shortcut." };
-      const a = await helper.ask("key", { key: k.key, mods: k.mods, deny });
-      return front(a.ok, a.text);
+      return said(await helper.ask("key", { key: k.key, mods: k.mods, deny }));
     }
-    case "scroll": {
-      const a = await helper.ask("scroll", { n: r.element, dir: r.text === "up" ? "up" : "down" });
-      return front(a.ok, a.text);
-    }
+    case "scroll":
+      return said(await helper.ask("scroll", { n: r.element, dir: r.text === "up" ? "up" : "down" }));
     default:
       return { ok: false, text: "Nothing to do." };
   }

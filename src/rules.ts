@@ -150,7 +150,7 @@ export function shareBody(files: readonly SharedFile[], boundary: string): Uint8
 /* ---- Jarvis using this Mac (src/computer.ts) ------------------------------- */
 
 export type Op = "look" | "do" | "run";
-export type Act = "press" | "type" | "key" | "scroll" | "open";
+export type Act = "press" | "type" | "key" | "scroll" | "open" | "front";
 
 /** One thing Jarvis asks of this Mac (jarvis-voice-agent lib/computer.ts). */
 export interface ComputerRequest {
@@ -164,7 +164,7 @@ export interface ComputerRequest {
 }
 
 const OPS: readonly Op[] = ["look", "do", "run"];
-const ACTS: readonly Act[] = ["press", "type", "key", "scroll", "open"];
+const ACTS: readonly Act[] = ["press", "type", "key", "scroll", "open", "front"];
 
 /** What Jarvis asked, checked: anything not as Jarvis sends it is not done. */
 export function readRequest(raw: unknown): ComputerRequest | null {
@@ -192,7 +192,7 @@ export function readRequest(raw: unknown): ComputerRequest | null {
  * which Jarvis allows only in a turn that read nothing someone else wrote, and a
  * terminal would be a way round that; System Settings and macOS's own password
  * prompts would let it change what it is allowed; a password app holds passwords;
- * and Jarvis itself is where control is turned off.
+ * Jarvis itself is where control is turned off; and the lock screen is the person's.
  */
 export const REFUSED_APPS: readonly string[] = [
   "com.apple.Terminal",
@@ -212,7 +212,11 @@ export const REFUSED_APPS: readonly string[] = [
   "com.apple.Passwords",
   "app.jarvis.desktop",
   "com.github.Electron",
+  "com.apple.loginwindow",
 ];
+
+/** The lock screen's own app: in front while the Mac is locked, when nothing on it can be seen or used. */
+export const LOCKED_APP = "com.apple.loginwindow";
 
 export const refusesInput = (bundle: string): boolean => REFUSED_APPS.includes(bundle);
 

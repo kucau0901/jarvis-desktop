@@ -59,15 +59,18 @@ which an admin has and gives others in Family.
 macOS then asks two things, once, in System Settings → Privacy & Security, and the menu shows which are
 still to allow:
 
-- **Accessibility**, to read the front window and press and type in other apps.
-- **Screen Recording**, only for a screenshot when you ask Jarvis to look at the screen.
+- **Accessibility**, to read other apps' windows and press and type in them.
+- **Screen Recording**, only for a screenshot when you ask Jarvis to look at an app.
 
 What it does, and what it never does:
 
 - A command runs in your login shell, in your home folder, as you, for two minutes at most. It has no
   keyboard, so it cannot be asked for a password (`sudo` fails).
-- A look is the front window's words and a numbered list of what can be pressed; a password field's
-  value is never read. A screenshot only when asked.
+- It works in an app where it is, behind the one you are using or not, so you go on working: a look is
+  that app's window, as words and a numbered list of what can be pressed (never a password field's value);
+  a press, typing and keys go to that app alone. An app it opens opens behind yours. Only what cannot be
+  done from behind needs the app in front, and Jarvis asks you first. A screenshot, of that window, only
+  when asked.
 - It never types, sends keys or presses into a terminal, Script Editor, Automator, Shortcuts, System
   Settings, macOS's password prompts, a password app or Jarvis itself; never into a password field.
 - It opens an app by its name or a web address, never a file.

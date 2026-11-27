@@ -132,7 +132,10 @@ function start(): void {
         },
         page: () => win?.webContents ?? null,
         access: () => (config?.accessId && openSecret(config.accessSecret) ? { id: config.accessId, secret: openSecret(config.accessSecret) } : null),
-        refresh: refreshTray,
+        refresh: () => {
+          buildMenu();
+          refreshTray();
+        },
         working: (on) => tray?.setTitle(on ? "●" : ""),
       });
     }
@@ -515,6 +518,9 @@ function buildMenu(): void {
             { type: "separator" },
             address,
             login,
+            { type: "separator" },
+            // In the app's own menu too, not only the menu bar's icon, which a full menu bar can hide.
+            ...computerMenu(),
             { type: "separator" },
             { role: "services" },
             { type: "separator" },

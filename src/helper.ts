@@ -9,7 +9,7 @@ import { createInterface } from "node:readline";
  * ends. Mac only.
  */
 
-export type HelperAnswer = { ok: boolean; text?: string; app?: string; bundle?: string };
+export type HelperAnswer = { ok: boolean; text?: string; app?: string; bundle?: string; window?: number };
 
 const WAIT_MS = 15_000;
 
