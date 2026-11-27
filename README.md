@@ -92,6 +92,31 @@ Macs can each be linked; Jarvis asks which when it is not clear.
 Without [signing](#signing), macOS forgets the two permissions at every update, and they need allowing
 again.
 
+### Claude Code builds
+
+A build job in Jarvis can hand its coding to [Claude Code](https://docs.claude.com/en/docs/claude-code)
+on this Mac, when you ask for it ("build a small Android app for the bakery, use Claude Code"): a site,
+an app or a tool. The job researches, then puts a card to you in Jarvis with what you asked and what it
+found; **only your tap there starts the build**. Claude Code must be installed here and signed in.
+
+- It works in a folder of its own in `/Users/Shared/JarvisBuilds`, outside your home folder, which stays
+  there for you to open. A later Claude Code job in the same Jarvis project goes on in the same folder.
+- It works in rounds. Each time Claude Code stops, Jarvis is told what it said and answers it, asking you
+  first what only you can decide, up to 50 rounds. There is no time limit but your Claude plan's: at its
+  limit this Mac waits for it to reset, up to a day, and goes on by itself.
+- It runs in Claude Code's sandbox, under settings given on its command line: it writes only in its
+  folder, reads nothing in your home folder but the Android SDK (read-only), reaches only the package
+  registries (npm, GitHub, Google's and Maven's, Gradle, crates.io, PyPI), and has no web tools. It starts
+  with a clean environment, so nothing this Mac keeps in its own reaches it.
+- While a round runs, the banner is up and the Mac does not sleep, and for half an hour after; **Stop**
+  ends it. A round that prints nothing for half an hour is stopped.
+- What goes back to Jarvis, when the job asks for it: the site (a `dist` folder, or `index.html` at the
+  top), what you install (its `out` folder) and the source, as plain files only (no links), each 20 MB at
+  most. What is bigger stays in the folder, and Jarvis says so. Then the job puts the usual Publish card,
+  or a pull request card, to you, or gives the files in Jobs: nothing is published until you tap that too.
+- What this Mac can build is what it has: Node, and the Android SDK with Java for Android apps; with only
+  the Command Line Tools, a Mac app is Swift, with no Xcode project or iOS.
+
 ## What it allows
 
 - Only pages from your Jarvis address may use the microphone, the camera, notifications and full screen.
