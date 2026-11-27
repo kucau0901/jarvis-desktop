@@ -92,6 +92,21 @@ Macs can each be linked; Jarvis asks which when it is not clear.
 Without [signing](#signing), macOS forgets the two permissions at every update, and they need allowing
 again.
 
+### Claude Code builds
+
+A build job in Jarvis can hand its coding to [Claude Code](https://docs.claude.com/en/docs/claude-code)
+on this Mac, when you ask for it ("build a page for the bakery, use Claude Code"). The job researches,
+then puts a card to you in Jarvis with what you asked and what it found; **only your tap there starts
+the build**. Claude Code must be installed here and signed in.
+
+- It runs in a new folder of its own, outside your home folder, in Claude Code's sandbox: it writes only
+  there, reads nothing in your home folder, reaches only npm's registry, and has no web tools. It starts
+  with a clean environment, so nothing this Mac keeps in its own reaches it.
+- It has 30 minutes. While it runs, the banner is up and the Mac does not sleep; **Stop** ends it.
+- What goes back to Jarvis is the site's plain files alone (no links), at most 300 files and 10 MB. The
+  folder is then removed. The job checks the files and puts the usual Publish card to you: nothing is
+  published until you tap that too.
+
 ## What it allows
 
 - Only pages from your Jarvis address may use the microphone, the camera, notifications and full screen.

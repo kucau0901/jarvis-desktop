@@ -1,7 +1,8 @@
 /**
  * Jarvis using this Mac for its person (jarvis-voice-agent docs/DESIGN.md,
  * "The Mac"): a command run in their shell, an app opened, its window read, a
- * press, typing, keys, scrolling. An app is used where it is, behind the one
+ * press, typing, keys, scrolling; and a Claude Code build their tap on a card
+ * started (src/build.ts). An app is used where it is, behind the one
  * its person works in or not, so they go on working; it comes to the front
  * only when they say so, for what cannot be done from behind.
  *
@@ -20,7 +21,7 @@
  * itself; never a password field; it opens an app or a web address, never a
  * file. Jarvis decides when it may ask at all.
  */
-import { app, BrowserWindow, globalShortcut, ipcMain, Notification, powerMonitor, screen, shell, systemPreferences, type MenuItemConstructorOptions, type WebContents } from "electron";
+import { app, BrowserWindow, globalShortcut, ipcMain, Notification, powerMonitor, powerSaveBlocker, screen, shell, systemPreferences, type MenuItemConstructorOptions, type WebContents } from "electron";
 import { execFile } from "node:child_process";
 import { appendFileSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -28,9 +29,10 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { openSecret, sealSecret, type Config } from "./config.ts";
 import { Helper } from "./helper.ts";
+import { findClaude, runBuild, stopBuilds, type Built } from "./build.ts";
 import { runCommand, stopCommands } from "./run.ts";
 import { screenshot } from "./screen.ts";
-import { answerOf, backoff, eventsUrl, gotOf, isMacToken, keyCombo, LOCKED_APP, mayOpen, nearApps, plainName, readRequest, REFUSED_APPS, STOP_SHORTCUT, type ComputerRequest } from "./rules.ts";
+import { answerOf, backoff, buildUrl, eventsUrl, gotOf, isMacToken, keyCombo, LOCKED_APP, mayOpen, nearApps, plainName, readBuild, readRequest, REFUSED_APPS, STOP_SHORTCUT, type BuildRequest, type ComputerRequest } from "./rules.ts";
 
 const exec = promisify(execFile);
 
@@ -63,6 +65,8 @@ let retry: NodeJS.Timeout | undefined;
 let ping: NodeJS.Timeout | undefined;
 let linking: NodeJS.Timeout | undefined;
 let busy = false;
+/** A Claude Code build running here (src/build.ts): one at a time, beside what else Jarvis asks. */
+let building = false;
 let banner: BrowserWindow | null = null;
 let bannerTimer: NodeJS.Timeout | undefined;
 
@@ -80,6 +84,10 @@ function set(s: Status): void {
 /** One line a request: when, what, and how it went. */
 function log(r: ComputerRequest, ok: boolean, said: string): void {
   const what = r.op === "do" ? `${r.act}${r.element ? ` ${r.element}` : ""}${r.text && r.act !== "type" ? ` ${r.text}` : r.act === "type" ? ` (${r.text?.length ?? 0} characters)` : ""}` : r.op === "run" ? `run ${r.text}` : `look at ${r.text ?? "the app in front"}${r.picture ? " with a screenshot" : ""}`;
+  logLine(what, ok, said);
+}
+
+function logLine(what: string, ok: boolean, said: string): void {
   const line = `${new Date().toISOString()} ${ok ? "ok " : "no "} ${what.replace(/\s+/g, " ").slice(0, 300)}${ok ? "" : ` (${said.replace(/\s+/g, " ").slice(0, 120)})`}\n`;
   try {
     appendFileSync(logFile(), line, { mode: 0o600 });
@@ -185,6 +193,7 @@ function turnOff(): void {
 /** Stop, from the banner or the shortcut: what runs ends, and control is off until turned on again. */
 async function stop(): Promise<void> {
   stopCommands();
+  stopBuilds();
   helper.restart();
   // What was running answers that it was stopped before the socket closes, so Jarvis is not left waiting.
   for (let i = 0; i < 40 && busy; i++) await pause(50);
@@ -254,6 +263,12 @@ function connect(): void {
 /** One message from Jarvis: only a request for this Mac is ours (alerts and the rest go by). */
 async function take(ws: WebSocket, raw: string): Promise<void> {
   if (!raw.startsWith('{"type":"computer.do"')) return;
+  // A build: got at once, what came of it later, by its own request.
+  const b = readBuild(raw);
+  if (b) {
+    ws.send(gotOf(b.id));
+    return build(b);
+  }
   const r = readRequest(raw);
   if (!r) return;
   ws.send(gotOf(r.id));
@@ -361,8 +376,56 @@ async function handle(r: ComputerRequest): Promise<{ ok: boolean; text: string; 
   }
 }
 
+/**
+ * A build its person's tap in Jarvis started (src/build.ts): run here, beside
+ * what else Jarvis asks, one at a time, with the banner up and the Mac kept
+ * from sleeping until it is over; then what came of it sent back.
+ */
+async function build(b: BuildRequest): Promise<void> {
+  if (building) return send(b.id, { ok: false, said: "This Mac is already building something for Jarvis: one at a time.", zip: null });
+  if (process.platform !== "darwin") return send(b.id, { ok: false, said: "Claude Code builds are only on a Mac.", zip: null });
+  building = true;
+  working(true);
+  const awake = powerSaveBlocker.start("prevent-app-suspension");
+  let r: Built;
+  try {
+    r = await runBuild(b, { claude: findClaude(homedir()), temp: app.getPath("temp"), home: homedir() });
+  } catch (e) {
+    r = { ok: false, said: e instanceof Error ? e.message : String(e), zip: null };
+  } finally {
+    powerSaveBlocker.stop(awake);
+    building = false;
+    working(false);
+  }
+  logLine(`build “${b.name}” with Claude Code`, r.ok, r.said);
+  return send(b.id, r);
+}
+
+/** What came of a build, to Jarvis, as this Mac (its token, and the Access headers): tried again a few times if the network fails. */
+async function send(id: string, r: Built): Promise<void> {
+  const c = deps.config();
+  const token = c?.computer ? openSecret(c.computer) : "";
+  if (!c || !token) return;
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}`, "content-type": "application/json" };
+  const a = deps.access();
+  if (a) Object.assign(headers, { "CF-Access-Client-Id": a.id, "CF-Access-Client-Secret": a.secret });
+  const body = JSON.stringify({ id, ok: r.ok, said: r.said.slice(0, 2_000), zip: r.zip ? r.zip.toString("base64url") : null });
+  for (let i = 0; i < 4; i++) {
+    try {
+      const res = await fetch(buildUrl(c.origin), { method: "POST", headers, body });
+      // Taken, or refused for good (its job gone, say): either way, sent.
+      if (res.status < 500) return;
+    } catch {
+      // the network; again in a moment
+    }
+    await pause(backoff(i + 1));
+  }
+}
+
 /** The banner while Jarvis works here, left out of screenshots, with Stop; and the tray icon's mark. */
 function working(on: boolean): void {
+  // A build keeps them up until it is over, whatever else comes and goes meanwhile.
+  on = on || building;
   deps.working(on);
   clearTimeout(bannerTimer);
   if (!on) {
