@@ -241,9 +241,11 @@ func press(_ n: Int, deny: [String]) -> [String: Any] {
   if isSecure(el) { return ["ok": false, "text": "That is a password field: Jarvis never types a password."] }
   if FIELDS.contains(str(el, kAXRoleAttribute)) {
     field = (a.pid, el)
-    return AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success
+    // A page's field is typed into by its value, the cursor or not; any other only once the cursor is really there.
+    if inPage(el) { AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue) }
+    return inPage(el) || into(el, a.pid)
       ? ["ok": true, "app": a.name, "text": "The cursor is in that field in \(a.name): type now."]
-      : ["ok": false, "text": "The cursor could not be put in that field."]
+      : ["ok": false, "text": "The cursor would not go into that field in \(a.name) from behind: \(BEHIND)"]
   }
   // Through Accessibility, wherever the window is: nothing of the person's is touched.
   if AXUIElementPerformAction(el, kAXPressAction as CFString) == .success { return ["ok": true, "app": a.name] }
@@ -275,8 +277,54 @@ func inPage(_ el: AXUIElement) -> Bool {
   return false
 }
 
-/// Text into field `n` of the last look, else the one that has the app's focus: written there through Accessibility,
-/// in front or behind; as keys only to an app in front.
+/// Waits up to `ms` for something to be so.
+func settle(_ ms: Int = 800, _ so: () -> Bool) -> Bool {
+  for _ in 0..<(ms / 100) {
+    if so() { return true }
+    usleep(100_000)
+  }
+  return so()
+}
+
+/// Whether the cursor is in that field.
+func holds(_ el: AXUIElement, _ pid: pid_t) -> Bool {
+  (attr(el, kAXFocusedAttribute) as? Bool) == true
+    || attr(AXUIElementCreateApplication(pid), kAXFocusedUIElementAttribute).map { CFEqual($0, el) } == true
+}
+
+/// The cursor put in a field: pressed, which UIKit apps such as WhatsApp take from behind, else focused. Whether it is
+/// there: an app can say yes to being focused and stay as it was.
+func into(_ el: AXUIElement, _ pid: pid_t) -> Bool {
+  if holds(el, pid) { return true }
+  AXUIElementPerformAction(el, kAXPressAction as CFString)
+  if settle(500, { holds(el, pid) }) { return true }
+  AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+  return settle(500) { holds(el, pid) }
+}
+
+/// UIKit apps on a Mac (Mac Catalyst and iPad apps: WhatsApp, Messages, Weather…): text Accessibility writes into
+/// their fields shows but the app never notices it, so nothing is sent; they are typed into as keys.
+func uikit(_ a: App) -> Bool {
+  a.app.bundleURL.flatMap { Bundle(url: $0)?.object(forInfoDictionaryKey: "UIDeviceFamily") } != nil
+}
+
+/// Keys for the text, one character at a time, to that app alone.
+func keys(_ text: String, _ pid: pid_t) {
+  let src = CGEventSource(stateID: .hidSystemState)
+  for ch in text {
+    let units = Array(String(ch).utf16)
+    for down in [true, false] {
+      let e = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: down)
+      e?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+      e?.postToPid(pid)
+    }
+    usleep(6_000)
+  }
+}
+
+/// Text into field `n` of the last look, else the one last pressed, else the one with the app's cursor, in front or
+/// behind, and said to be typed only once the field shows it (a page's field cannot be read back at once: Jarvis is
+/// told to look). A Mac app's own field takes it through Accessibility; a UIKit app's gets keys.
 func type(_ text: String, into n: Int?, deny: [String]) -> [String: Any] {
   let (a, why) = target(deny)
   guard let a else { return ["ok": false, "text": why ?? ""] }
@@ -287,33 +335,33 @@ func type(_ text: String, into n: Int?, deny: [String]) -> [String: Any] {
   } else if let (pid, el) = field, pid == a.pid {
     chosen = el
   }
-  if let el = chosen, !isSecure(el) { AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue) }
-  if let el = chosen ?? attr(AXUIElementCreateApplication(a.pid), kAXFocusedUIElementAttribute).map({ $0 as! AXUIElement }) {
-    if isSecure(el) { return ["ok": false, "text": "That is a password field: Jarvis never types a password."] }
-    // A page's field (Electron, Safari) says yes to selected text and does nothing: its value is written, as typing would.
-    if !inPage(el) && AXUIElementSetAttributeValue(el, kAXSelectedTextAttribute as CFString, text as CFString) == .success { return ["ok": true, "app": a.name] }
+  guard let el = chosen ?? attr(AXUIElementCreateApplication(a.pid), kAXFocusedUIElementAttribute).map({ $0 as! AXUIElement }) else {
+    return ["ok": false, "text": "No field to type into in \(a.name): press one first (press N)."]
+  }
+  if isSecure(el) { return ["ok": false, "text": "That is a password field: Jarvis never types a password."] }
+  let before = str(el, kAXValueAttribute)
+  // A page's field (Electron, Safari) says yes to selected text and does nothing: its value is written, as typing would.
+  if inPage(el) {
+    AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+    return AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, (before + text) as CFString) == .success
+      ? ["ok": true, "app": a.name, "text": "Typed in \(a.name). Look again to see it there before saying it is done."]
+      : ["ok": false, "text": "\(a.name) did not take the text."]
+  }
+  let shows = { settle { let now = str(el, kAXValueAttribute); return now != before && now.contains(text) } }
+  let typed: [String: Any] = ["ok": true, "app": a.name, "text": "Typed in \(a.name)."]
+  if !uikit(a) {
+    if AXUIElementSetAttributeValue(el, kAXSelectedTextAttribute as CFString, text as CFString) == .success, shows() { return typed }
     var settable: DarwinBoolean = false
     if AXUIElementIsAttributeSettable(el, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue,
-       AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, (str(el, kAXValueAttribute) + text) as CFString) == .success {
-      return ["ok": true, "app": a.name]
+       AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, (before + text) as CFString) == .success, shows() {
+      return typed
     }
   }
-  guard a.app.isActive else { return ["ok": false, "text": "\(a.name) has no field that takes text from behind: press the field first (press N), or \(BEHIND)"] }
   if IsSecureEventInputEnabled() { return ["ok": false, "text": "Secure input is on (a password is being typed somewhere): not now."] }
-  let src = CGEventSource(stateID: .hidSystemState)
-  let units = Array(text.utf16)
-  var i = 0
-  while i < units.count {
-    let chunk = Array(units[i..<min(i + 16, units.count)])
-    for down in [true, false] {
-      let e = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: down)
-      e?.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
-      e?.post(tap: .cghidEventTap)
-    }
-    usleep(8_000)
-    i += 16
-  }
-  return ["ok": true, "app": a.name]
+  guard into(el, a.pid) else { return ["ok": false, "text": "The cursor would not go into that field in \(a.name) from behind: \(BEHIND)"] }
+  keys(text, a.pid)
+  if shows() { return typed }
+  return ["ok": false, "text": "\(a.name) did not take the typing\(a.app.isActive ? "." : " from behind: \(BEHIND)")"]
 }
 
 let KEYS: [String: Int] = [
@@ -341,7 +389,7 @@ func key(_ name: String, mods: [String], deny: [String]) -> [String: Any] {
   if electron.contains(a.pid) && !a.app.isActive {
     return ["ok": false, "text": "Keys do not reach \(a.name) from behind: press its buttons instead (press N), or \(BEHIND)"]
   }
-  if a.app.isActive && IsSecureEventInputEnabled() { return ["ok": false, "text": "Secure input is on (a password is being typed somewhere): not now."] }
+  if IsSecureEventInputEnabled() { return ["ok": false, "text": "Secure input is on (a password is being typed somewhere): not now."] }
   let flags = mods.reduce(CGEventFlags()) { $0.union(MODS[$1] ?? []) }
   let src = CGEventSource(stateID: .hidSystemState)
   for down in [true, false] {
@@ -350,7 +398,8 @@ func key(_ name: String, mods: [String], deny: [String]) -> [String: Any] {
     e?.postToPid(a.pid)
     usleep(20_000)
   }
-  return ["ok": true, "app": a.name]
+  // Whether it did anything cannot be told from here.
+  return ["ok": true, "app": a.name, "text": "Sent to \(a.name). Look again to see what it did before saying it is done."]
 }
 
 /// The nearest scroll area: around element `n`, or the first in the app's window.
