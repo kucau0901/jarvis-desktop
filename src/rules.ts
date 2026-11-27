@@ -146,3 +146,145 @@ export function shareBody(files: readonly SharedFile[], boundary: string): Uint8
   }
   return out;
 }
+
+/* ---- Jarvis using this Mac (src/computer.ts) ------------------------------- */
+
+export type Op = "look" | "do" | "run";
+export type Act = "press" | "type" | "key" | "scroll" | "open";
+
+/** One thing Jarvis asks of this Mac (jarvis-voice-agent lib/computer.ts). */
+export interface ComputerRequest {
+  id: string;
+  op: Op;
+  act: Act | null;
+  element: number | null;
+  text: string | null;
+  picture: boolean;
+  ms: number;
+}
+
+const OPS: readonly Op[] = ["look", "do", "run"];
+const ACTS: readonly Act[] = ["press", "type", "key", "scroll", "open"];
+
+/** What Jarvis asked, checked: anything not as Jarvis sends it is not done. */
+export function readRequest(raw: unknown): ComputerRequest | null {
+  if (typeof raw !== "string" || raw.length > 20_000) return null;
+  let m: Record<string, unknown>;
+  try {
+    m = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if (!m || m.type !== "computer.do" || typeof m.id !== "string" || !/^[\w-]{1,64}$/.test(m.id)) return null;
+  const op = OPS.find((o) => o === m.op);
+  const act = m.act === null ? null : ACTS.find((a) => a === m.act);
+  const element = m.element === null ? null : Number.isInteger(m.element) && (m.element as number) >= 1 && (m.element as number) <= 1000 ? (m.element as number) : undefined;
+  const text = m.text === null ? null : typeof m.text === "string" && m.text.length <= 10_000 ? m.text : undefined;
+  const ms = typeof m.ms === "number" && m.ms >= 1000 && m.ms <= 300_000 ? m.ms : undefined;
+  if (!op || act === undefined || element === undefined || text === undefined || typeof m.picture !== "boolean" || ms === undefined) return null;
+  if (op === "do" && !act) return null;
+  return { id: m.id, op, act, element, text, picture: m.picture, ms };
+}
+
+/**
+ * The apps Jarvis never types, sends keys or presses into, checked by the helper
+ * at that moment. Not a list of forbidden commands: commands go through `run`,
+ * which Jarvis allows only in a turn that read nothing someone else wrote, and a
+ * terminal would be a way round that; System Settings and macOS's own password
+ * prompts would let it change what it is allowed; a password app holds passwords;
+ * and Jarvis itself is where control is turned off.
+ */
+export const REFUSED_APPS: readonly string[] = [
+  "com.apple.Terminal",
+  "com.googlecode.iterm2",
+  "dev.warp.Warp-Stable",
+  "net.kovidgoyal.kitty",
+  "org.alacritty",
+  "com.github.wez.wezterm",
+  "com.mitchellh.ghostty",
+  "co.zeit.hyper",
+  "com.apple.ScriptEditor2",
+  "com.apple.Automator",
+  "com.apple.shortcuts",
+  "com.apple.systempreferences",
+  "com.apple.SecurityAgent",
+  "com.apple.keychainaccess",
+  "com.apple.Passwords",
+  "app.jarvis.desktop",
+  "com.github.Electron",
+];
+
+export const refusesInput = (bundle: string): boolean => REFUSED_APPS.includes(bundle);
+
+/** What `open` may open: an app by its name, or a web address. Never a file or a folder, since opening one can run it, nor another kind of link. */
+export function mayOpen(text: string): { app: string } | { url: string } | null {
+  const t = text.trim();
+  if (/^https?:\/\//i.test(t)) {
+    try {
+      const u = new URL(t);
+      return (u.protocol === "https:" || u.protocol === "http:") && !u.username && !u.password ? { url: u.href } : null;
+    } catch {
+      return null;
+    }
+  }
+  return /^[\p{L}\p{N}][\p{L}\p{N} .&'+()_-]{0,59}$/u.test(t) && !t.includes("..") ? { app: t } : null;
+}
+
+/** The shortcut that stops whatever Jarvis is doing here and turns control off. */
+export const STOP_SHORTCUT = "CommandOrControl+Shift+Escape";
+
+const KEY_NAMES = new Set([
+  ..."abcdefghijklmnopqrstuvwxyz0123456789-=[];',./\\`",
+  "return", "tab", "space", "delete", "forwarddelete", "escape", "left", "right", "up", "down", "home", "end", "pageup", "pagedown",
+  ...Array.from({ length: 12 }, (_, i) => `f${i + 1}`),
+]);
+const KEY_ALIASES: Record<string, string> = { enter: "return", esc: "escape", backspace: "delete", pgup: "pageup", pgdn: "pagedown" };
+const MOD_ALIASES: Record<string, string> = { cmd: "cmd", command: "cmd", "⌘": "cmd", shift: "shift", alt: "alt", option: "alt", opt: "alt", ctrl: "ctrl", control: "ctrl", fn: "fn" };
+
+/** A key combo as Jarvis writes it ("cmd+shift+t"), or null: a key the helper knows, never the Stop shortcut. */
+export function keyCombo(text: string): { key: string; mods: string[] } | null {
+  const parts = text.toLowerCase().split("+").map((p) => p.trim());
+  const named = parts.pop() ?? "";
+  const key = KEY_ALIASES[named] ?? named;
+  if (!KEY_NAMES.has(key)) return null;
+  const mods = [...new Set(parts.map((p) => MOD_ALIASES[p]))];
+  if (mods.some((m) => m === undefined)) return null;
+  const sorted = (mods as string[]).sort();
+  if (key === "escape" && sorted.includes("cmd") && sorted.includes("shift")) return null;
+  return { key, mods: sorted };
+}
+
+/** The most of an answer's words, and of a whole answer with its screenshot (as Jarvis takes them). */
+export const MAX_TEXT = 16_000;
+export const MAX_ANSWER = 512 * 1024;
+
+/** At most `max` characters: the start and the end, with how much was left out between. */
+export function capOutput(s: string, max = MAX_TEXT): string {
+  if (s.length <= max) return s;
+  const head = Math.floor(max / 4);
+  const tail = max - head - 60;
+  return `${s.slice(0, head)}\n… ${s.length - head - tail} characters left out …\n${s.slice(-tail)}`;
+}
+
+/** That a request arrived, sent at once: without it Jarvis counts this Mac as asleep. */
+export const gotOf = (id: string): string => JSON.stringify({ type: "computer.got", id });
+
+/** The answer as Jarvis takes it: its type first, which Jarvis reads before the rest, and within its size. */
+export function answerOf(id: string, ok: boolean, text: string, image: string | null = null): string {
+  const words = capOutput(text);
+  const s = JSON.stringify({ type: "computer.answer", id, ok, text: words, image });
+  return s.length <= MAX_ANSWER ? s : JSON.stringify({ type: "computer.answer", id, ok, text: `${words}\n(The screenshot was too big to send.)`, image: null });
+}
+
+/** How long to wait before connecting again: doubling from a second, a minute at most. */
+export const backoff = (attempt: number): number => Math.min(60_000, 1000 * 2 ** Math.min(Math.max(attempt, 0), 6));
+
+/** A Mac's device token, as Jarvis makes them (lib/devices.ts). */
+export const isMacToken = (t: unknown): t is string => typeof t === "string" && /^jdv1_[abcdefghijkmnpqrstuvwxyz23456789]{32}$/.test(t);
+
+/** The events socket for this Mac, named so in Jarvis's list. */
+export function eventsUrl(origin: string): string {
+  const u = new URL("/api/v1/events", origin);
+  u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+  return u.href;
+}

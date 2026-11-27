@@ -29,5 +29,19 @@ if (origin && location.origin === origin && !location.pathname.startsWith("/api/
     onTalk: (cb: () => void): void => {
       ipcRenderer.on("jd:talk", () => cb());
     },
+    // On a Mac, Jarvis may be let use it (src/computer.ts): its person turned that on, and the page,
+    // signed in as them, makes this Mac a device of theirs and hands its token over once.
+    ...(process.platform === "darwin"
+      ? {
+          /** Asked to link this Mac, by its name. */
+          onLinkComputer: (cb: (name: string) => void): void => {
+            ipcRenderer.on("jd:linkComputer", (_e, name: unknown) => cb(String(name ?? "Mac")));
+          },
+          /** The answer: the new device's token, or why not. */
+          computerLinked: (r: { token?: unknown; error?: unknown }): void => {
+            ipcRenderer.send("jd:computerLinked", typeof r?.token === "string" ? { token: r.token } : { error: String(r?.error ?? "") });
+          },
+        }
+      : {}),
   });
 }

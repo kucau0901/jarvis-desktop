@@ -15,6 +15,10 @@ adds what a browser tab can't do:
 
 The notifications and the talk shortcut need a Jarvis recent enough to know about the desktop app.
 
+- **Jarvis can use your Mac** when you ask, from the glasses, your phone or the web: "how much disk is free
+  on my Mac?", "open Spotify on the office Mac", "what's on my Mac's screen?", then press and type there.
+  Off until you turn it on ([below](#letting-jarvis-use-this-mac)).
+
 ## Install
 
 Download the newest `.dmg` (Mac) or `.exe` (Windows) from
@@ -45,6 +49,40 @@ in the system keychain and only ever sent to your Jarvis address.
 
 To change the address later: the app menu (Mac) or File menu (Windows) → *Change Jarvis Address…*.
 
+## Letting Jarvis use this Mac
+
+In the menu bar, Jarvis's menu → **Let Jarvis control this Mac**. The first time, Jarvis (signed in, in the
+app's window) makes this Mac one of your devices, named after it; it is then listed in Jarvis's Devices,
+where revoking it unlinks it. It needs a Jarvis recent enough to know about it, and the `computer` scope,
+which an admin has and gives others in Family.
+
+macOS then asks two things, once, in System Settings → Privacy & Security, and the menu shows which are
+still to allow:
+
+- **Accessibility**, to read the front window and press and type in other apps.
+- **Screen Recording**, only for a screenshot when you ask Jarvis to look at the screen.
+
+What it does, and what it never does:
+
+- A command runs in your login shell, in your home folder, as you, for two minutes at most. It has no
+  keyboard, so it cannot be asked for a password (`sudo` fails).
+- A look is the front window's words and a numbered list of what can be pressed; a password field's
+  value is never read. A screenshot only when asked.
+- It never types, sends keys or presses into a terminal, Script Editor, Automator, Shortcuts, System
+  Settings, macOS's password prompts, a password app or Jarvis itself; never into a password field.
+- It opens an app by its name or a web address, never a file.
+- While it works a banner says so at the top of the screen, with **Stop**. <kbd>⌘ Shift Esc</kbd> stops it
+  from anywhere, too, and turns control off until you turn it on again.
+- Everything it did is in the menu → *What Jarvis Did on This Mac…*.
+
+Jarvis itself decides when it may ask: only you, in your own words, never a routine, a job or a bot; and a
+command only in a turn that has not read someone else's words, such as an email, a web page or the
+screen ([why](https://github.com/kucau0901/jarvis-voice-agent/blob/main/docs/DESIGN.md#the-mac)). Several
+Macs can each be linked; Jarvis asks which when it is not clear.
+
+Without [signing](#signing), macOS forgets the two permissions at every update, and they need allowing
+again.
+
 ## What it allows
 
 - Only pages from your Jarvis address may use the microphone, the camera, notifications and full screen.
@@ -56,7 +94,8 @@ To change the address later: the app menu (Mac) or File menu (Windows) → *Chan
 
 ## Build it yourself
 
-Needs Node 24.
+Needs Node 24, and on a Mac the Xcode command line tools, for the helper that reads and uses other apps
+(`native/jarvis-control.swift`, built by `scripts/native.mjs` into `build/native/`).
 
 ```bash
 npm install

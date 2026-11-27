@@ -10,8 +10,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test test/*.test.ts",
-    "start": "npm run build && electron .",
-    "dist": "npm run build && electron-builder"
+    "start": "npm run build && node scripts/native.mjs && electron .",
+    "dist": "npm run build && node scripts/native.mjs && electron-builder"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
@@ -32,6 +32,7 @@
       "hardenedRuntime": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
+      "extraResources": [{ "from": "build/native/jarvis-control", "to": "jarvis-control" }],
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Jarvis listens when you talk to it.",
         "NSCameraUsageDescription": "Jarvis takes a photo when you attach one to a question.",
