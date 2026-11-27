@@ -71,6 +71,10 @@ What it does, and what it never does:
   a press, typing and keys go to that app alone. An app it opens opens behind yours. Only what cannot be
   done from behind needs the app in front, and Jarvis asks you first. A screenshot, of that window, only
   when asked.
+- An app is found by its name as you say it: "whatsapp", "chatpad" for Chat Pad, or part of a name only
+  one open app has. Apps made of a web page (Electron apps such as Slack or Discord) take presses and
+  typing from behind but not keys: there Jarvis presses the app's own buttons, or asks to bring it forward.
+- While this Mac is locked its apps can be neither seen nor used; commands still run.
 - It never types, sends keys or presses into a terminal, Script Editor, Automator, Shortcuts, System
   Settings, macOS's password prompts, a password app or Jarvis itself; never into a password field.
 - It opens an app by its name or a web address, never a file.

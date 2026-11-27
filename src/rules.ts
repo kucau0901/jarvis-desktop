@@ -234,6 +234,21 @@ export function mayOpen(text: string): { app: string } | { url: string } | null 
   return /^[\p{L}\p{N}][\p{L}\p{N} .&'+()_-]{0,59}$/u.test(t) && !t.includes("..") ? { app: t } : null;
 }
 
+/** A name as people say it: letters and digits only, any case ("chatpad" is Chat Pad; marks some names carry unseen go). */
+export const plainName = (s: string): string => s.normalize("NFKC").replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();
+
+/**
+ * Installed apps named like what Jarvis asked to open, the closest first: the same name as people say it, then
+ * those with it inside ("Chat" in Chat Pad). At most five, for Jarvis to choose from or say.
+ */
+export function nearApps(asked: string, installed: readonly string[]): string[] {
+  const want = plainName(asked);
+  if (!want) return [];
+  const same = installed.filter((n) => plainName(n) === want);
+  const inside = installed.filter((n) => plainName(n) !== want && plainName(n).includes(want));
+  return [...new Set([...same, ...inside])].slice(0, 5);
+}
+
 /** The shortcut that stops whatever Jarvis is doing here and turns control off. */
 export const STOP_SHORTCUT = "CommandOrControl+Shift+Escape";
 

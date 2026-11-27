@@ -22,14 +22,15 @@
  */
 import { app, BrowserWindow, globalShortcut, ipcMain, Notification, powerMonitor, screen, shell, systemPreferences, type MenuItemConstructorOptions, type WebContents } from "electron";
 import { execFile } from "node:child_process";
-import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { openSecret, sealSecret, type Config } from "./config.ts";
 import { Helper } from "./helper.ts";
 import { runCommand, stopCommands } from "./run.ts";
 import { screenshot } from "./screen.ts";
-import { answerOf, backoff, eventsUrl, gotOf, isMacToken, keyCombo, LOCKED_APP, mayOpen, readRequest, REFUSED_APPS, STOP_SHORTCUT, type ComputerRequest } from "./rules.ts";
+import { answerOf, backoff, eventsUrl, gotOf, isMacToken, keyCombo, LOCKED_APP, mayOpen, nearApps, plainName, readRequest, REFUSED_APPS, STOP_SHORTCUT, type ComputerRequest } from "./rules.ts";
 
 const exec = promisify(execFile);
 
@@ -275,7 +276,36 @@ const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** What an act says back: that it was done, and in which app, or why not. */
 function said(a: { ok: boolean; text?: string; app?: string }): { ok: boolean; text: string } {
-  return a.ok ? { ok: true, text: a.app ? `Done in ${a.app}.` : "Done." } : { ok: false, text: a.text ?? "It did not work." };
+  return a.ok ? { ok: true, text: a.text ?? (a.app ? `Done in ${a.app}.` : "Done.") } : { ok: false, text: a.text ?? "It did not work." };
+}
+
+/** The apps installed where apps are kept, by name: for an app asked for by a name a little off. */
+function installedApps(): string[] {
+  const dirs = ["/Applications", "/Applications/Utilities", "/System/Applications", "/System/Applications/Utilities", join(homedir(), "Applications")];
+  return dirs.flatMap((d) => {
+    try {
+      return readdirSync(d).filter((f) => f.endsWith(".app")).map((f) => f.slice(0, -4));
+    } catch {
+      return [];
+    }
+  });
+}
+
+const openBehind = (args: string[]) => exec("/usr/bin/open", ["-g", ...args]).then(() => true, () => false);
+
+/** An app opened behind what is in use, by its name as people say it ("ChatPad" opens Chat Pad); else the names near it. */
+async function openApp(asked: string): Promise<{ ok: boolean; text: string }> {
+  let name = asked;
+  if (!(await openBehind(["-a", name]))) {
+    const near = nearApps(asked, installedApps());
+    const same = near.find((n) => plainName(n) === plainName(asked));
+    if (!same || !(await openBehind(["-a", same]))) {
+      return { ok: false, text: `No app called ${asked} on this Mac.${near.length ? ` Apps with a name like it: ${near.join(", ")}.` : ""}` };
+    }
+    name = same;
+  }
+  await pause(700);
+  return { ok: true, text: `${name} is open, behind what is in use: look at it by its name.` };
 }
 
 async function handle(r: ComputerRequest): Promise<{ ok: boolean; text: string; image?: string | null }> {
@@ -302,18 +332,17 @@ async function handle(r: ComputerRequest): Promise<{ ok: boolean; text: string; 
     case "open": {
       const o = r.text ? mayOpen(r.text) : null;
       if (!o) return { ok: false, text: "Only an app, by its name, or a web address is opened: never a file." };
-      // -g: opened behind what is in use.
-      const opened = await exec("/usr/bin/open", "url" in o ? ["-g", o.url] : ["-g", "-a", o.app]).then(() => true, () => false);
-      if (!opened) return { ok: false, text: "url" in o ? "It could not be opened." : `No app called ${o.app} on this Mac.` };
+      if ("app" in o) return openApp(o.app);
+      if (!(await openBehind([o.url]))) return { ok: false, text: "It could not be opened." };
       await pause(700);
-      return { ok: true, text: `${"url" in o ? "Opened in the browser" : `${o.app} is open`}, behind what is in use: look at it by its name.` };
+      return { ok: true, text: "Opened in the browser, behind what is in use: look at it by its name." };
     }
     case "front":
       return said(await helper.ask("activate"));
     case "press":
       return said(await helper.ask("press", { n: r.element, deny }));
     case "type":
-      return said(await helper.ask("type", { text: r.text ?? "", deny }));
+      return said(await helper.ask("type", { text: r.text ?? "", n: r.element, deny }));
     case "key": {
       const k = r.text ? keyCombo(r.text) : null;
       if (!k) return { ok: false, text: "Not a key this Mac knows (like cmd+t), or it is the Stop shortcut." };
