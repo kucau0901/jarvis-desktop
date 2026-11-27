@@ -30,9 +30,12 @@
       "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }],
       "identity": "-",
       "hardenedRuntime": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Jarvis listens when you talk to it.",
         "NSCameraUsageDescription": "Jarvis takes a photo when you attach one to a question.",
+        "NSAppleEventsUsageDescription": "Jarvis asks other apps to do things when you ask it to use this Mac.",
         "CFBundleDocumentTypes": [
           {
             "CFBundleTypeName": "File",

@@ -74,6 +74,25 @@ Other commands:
 A tag `v*` pushed to GitHub builds both installers and attaches them to that release
 (`.github/workflows/release.yml`).
 
+### Signing
+
+Without signing, the Mac app is signed ad hoc, and macOS treats each new version as a new app: whatever it was
+allowed in System Settings → Privacy & Security (Accessibility, Screen Recording) has to be allowed again after
+every update. Signed with an Apple Developer ID and notarized, it keeps them, and opens with no warning.
+
+The build signs and notarizes the Mac app by itself once the repository has these secrets (Settings → Secrets
+and variables → Actions):
+
+| Secret | What it is |
+| --- | --- |
+| `MAC_CSC_LINK` | A *Developer ID Application* certificate with its private key, exported from Keychain Access as a `.p12`, then base64 (`base64 -i cert.p12`) |
+| `MAC_CSC_KEY_PASSWORD` | The password the `.p12` was exported with |
+| `APPLE_API_KEY` | An App Store Connect API key (Users and Access → Integrations), the whole text of its `.p8` file |
+| `APPLE_API_KEY_ID` | That key's ID |
+| `APPLE_API_ISSUER` | The issuer ID shown above the keys |
+
+Without them, or in a fork, it builds as before. Windows is not signed.
+
 ## License
 
 MIT
