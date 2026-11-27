@@ -79,7 +79,7 @@ function set(s: Status): void {
 
 /** One line a request: when, what, and how it went. */
 function log(r: ComputerRequest, ok: boolean, said: string): void {
-  const what = r.op === "do" ? `${r.act}${r.element ? ` ${r.element}` : ""}${r.text && r.act !== "type" ? ` ${r.text}` : r.act === "type" ? ` (${r.text?.length ?? 0} characters)` : ""}` : r.op === "run" ? `run ${r.text}` : `look${r.picture ? " with a screenshot" : ""}`;
+  const what = r.op === "do" ? `${r.act}${r.element ? ` ${r.element}` : ""}${r.text && r.act !== "type" ? ` ${r.text}` : r.act === "type" ? ` (${r.text?.length ?? 0} characters)` : ""}` : r.op === "run" ? `run ${r.text}` : `look at ${r.text ?? "the app in front"}${r.picture ? " with a screenshot" : ""}`;
   const line = `${new Date().toISOString()} ${ok ? "ok " : "no "} ${what.replace(/\s+/g, " ").slice(0, 300)}${ok ? "" : ` (${said.replace(/\s+/g, " ").slice(0, 120)})`}\n`;
   try {
     appendFileSync(logFile(), line, { mode: 0o600 });
@@ -323,8 +323,14 @@ async function handle(r: ComputerRequest): Promise<{ ok: boolean; text: string; 
   if (r.op === "look") {
     const read = await helper.ask("read", { max: 6000, name: r.text ?? "" });
     if (!read.ok) return { ok: false, text: read.text ?? "It could not be read." };
-    const image = r.picture ? await screenshot(typeof read.window === "number" ? read.window : null) : null;
-    const missing = r.picture && !image ? "\n(No screenshot: Jarvis is not allowed Screen Recording on this Mac.)" : "";
+    // A picture of that app's own window, never of the screen: what is in front of it is someone else's.
+    const window = typeof read.window === "number" ? read.window : null;
+    const image = r.picture && window ? await screenshot(window) : null;
+    const missing = !r.picture || image
+      ? ""
+      : window
+        ? "\n(No screenshot: Jarvis is not allowed Screen Recording on this Mac.)"
+        : "\n(No screenshot: its window is not on this screen, minimized or on another desktop.)";
     return { ok: true, text: `${read.text ?? ""}${missing}`, image };
   }
   const deny = REFUSED_APPS;
